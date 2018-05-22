@@ -1,28 +1,33 @@
+#!/usr/bin/python
+# -*- coding: UTF-8 -*-
+
 import torch
 import codecs
 from torch.utils.data import DataLoader, Dataset
 import re
-
+from torch.nn.utils.rnn import pad_sequence
 
 def load_seqs_data(filepath):
-    file = codecs.open(filepath,'r','utf-8')
-    lines = [line.strip() for line in file] 
-    file.close()
+    with codecs.open(filepath,'r','utf-8') as file:
+        lines = [line.strip() for line in file]
 
-    trainingSequences = []
+    seqs = []
     for line in lines:
-        
         word = line.split()
         assert len(word) >= 2
         seq = word[1:]
-        trainingSequences.append((word[0], seq))
+        seqs.append((word[0], seq))
 
-    return sorted(trainingSequences, key=lambda sequence: len(sequence[1]))
+    #return sorted(seqs, key=lambda sequence: len(sequence[1]))
+    return seqs
+
+def slim_seq(seq):
+    lines = re.split(r"[;,!?]", seq)
+    return max(lines, key=len)
 
 def load_vocab_data():
-    file = codecs.open('./data/vocab.txt', 'r', 'utf-8')
-    lines = [line.strip() for line in file] 
-    file.close()
+    with codecs.open('./data/vocab.txt', 'r', 'utf-8') as file:
+        lines = [line.strip() for line in file]
 
     word_dic = {}
     for line in lines:
@@ -52,9 +57,8 @@ def load_ix_dics():
     return word_to_ix, tag_to_ix, ix_to_tag
  
 def load_tag_dic():
-    file = codecs.open('./data/id2tag.txt','r','utf-8')
-    lines = [line.strip() for line in file] 
-    file.close()
+    with codecs.open('./data/id2tag.txt','r','utf-8') as file:
+        lines = [line.strip() for line in file]
 
     tag_dic = {}
     for line in lines:
@@ -71,16 +75,8 @@ def vectorize_data(data, to_ix):
 def collate_fn(batch):
     batch.sort(key=lambda x: len(x[0]), reverse=True)
     seqs, label, lens, raw_data = zip(*batch)
-    pad_seqs = []
-    lens = []
-    max_len = len(seqs[0])
-    for i in range(len(seqs)):
-        temp_seq = [0] * max_len
-        temp_seq[:len(seqs[i])] = seqs[i]
-        pad_seqs.append(temp_seq)
-        lens.append(len(seqs[i]))
 
-    pad_seqs_tensor = torch.LongTensor(pad_seqs)
+    pad_seqs_tensor = pad_sequence([torch.LongTensor(seq) for seq in seqs], True)
     label_tensor = torch.LongTensor(label)
     lens_tensor = torch.LongTensor(lens)
 
@@ -89,12 +85,12 @@ def collate_fn(batch):
 
 def create_dataset(data, word_to_ix, tag_to_ix, bs=4):
     vectorized_seqs = vectorize_data(data, word_to_ix)
-    seq_lengths = torch.LongTensor([len(s) for s in vectorized_seqs])
-    target_tensor = torch.LongTensor([tag_to_ix[y] for y, _ in data])
+    seq_lengths = [len(s) for s in vectorized_seqs]
+    labels = [tag_to_ix[y] for y, _ in data]
     raw_data = [x for _, x in data]
-    return DataLoader(MyDataset(vectorized_seqs, target_tensor, seq_lengths, raw_data),
+    return DataLoader(MyDataset(vectorized_seqs, labels, seq_lengths, raw_data),
                       batch_size=bs,
-                      shuffle=False,
+                      shuffle=True,
                       collate_fn=collate_fn,
                       drop_last=True,
                       num_workers=0)
@@ -108,8 +104,8 @@ class MyDataset(Dataset):
         self.raw_datas = raw_datas
 
     def __getitem__(self, index):
-        seq, target, len, raw_data = self.seqs[index], self.labels[index], self.lens[index], self.raw_datas[index] 
-        return seq, target, len, ''.join(raw_data)
+        seq, label, len, raw_data = self.seqs[index], self.labels[index], self.lens[index], self.raw_datas[index]
+        return seq, label, len, ''.join(raw_data)
 
     def __len__(self):
         return len(self.seqs)
